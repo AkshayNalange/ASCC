@@ -1739,103 +1739,111 @@
 
   // ════════════════════════════════════════════════════
   // ── LIVE VISIT & DOWNLOAD COUNTERS ──
-  // Uses CounterAPI (counterapi.dev) — free, no signup,
-  // auto-creates counters on first use.
-  // Namespace: ascc-akshay  |  Keys: visits / downloads
+  // Uses CounterAPI v1 (counterapi.dev) — free, no signup.
+  // V1 docs: GET /v1/:namespace/:name/up  → increment + return count
+  //          GET /v1/:namespace/:name     → read current count
+  // Auto-creates counters on first /up call.
   // ════════════════════════════════════════════════════
 
   const NAMESPACE = 'ascc-akshay-nalange';
   const API_BASE  = 'https://api.counterapi.dev/v1';
 
-  // Helper: format numbers with commas (e.g. 1234 → "1,234")
+  // Format: 1234 → "1,234"
   function fmt(n) {
-    return n >= 1000 ? n.toLocaleString() : String(n);
+    return Number(n).toLocaleString();
   }
 
-  // Helper: animate a number rolling up to its new value
-  function animateCount(el, fromVal, toVal, duration = 600) {
-    const start = performance.now();
-    const diff  = toVal - fromVal;
+  // Animate a number rolling from fromVal to toVal
+  function animateCount(el, fromVal, toVal, duration = 700) {
+    if (isNaN(toVal)) return;
+    const diff = toVal - fromVal;
     if (diff === 0) { el.textContent = fmt(toVal); return; }
     el.classList.add('counter-tick');
     setTimeout(() => el.classList.remove('counter-tick'), 500);
+    const start = performance.now();
     function step(now) {
-      const progress = Math.min((now - start) / duration, 1);
-      const eased    = 1 - Math.pow(1 - progress, 3); // ease-out cubic
+      const t = Math.min((now - start) / duration, 1);
+      const eased = 1 - Math.pow(1 - t, 3);
       el.textContent = fmt(Math.round(fromVal + diff * eased));
-      if (progress < 1) requestAnimationFrame(step);
+      if (t < 1) requestAnimationFrame(step);
     }
     requestAnimationFrame(step);
   }
 
-  // Sync all four counter elements (hero + download section)
+  // Update all visit display elements
   function setVisitDisplay(count) {
-    const heroEl   = document.getElementById('visit-count');
-    const sectionEl = document.getElementById('dl-section-visits');
-    const prev = parseInt(heroEl.textContent.replace(/,/g, '')) || 0;
-    animateCount(heroEl,    prev, count);
-    animateCount(sectionEl, prev, count);
+    ['visit-count', 'dl-section-visits'].forEach(id => {
+      const el = document.getElementById(id);
+      if (!el) return;
+      const prev = parseInt(el.textContent.replace(/[^0-9]/g, '')) || 0;
+      animateCount(el, prev, count);
+    });
   }
 
+  // Update all download display elements
   function setDownloadDisplay(count) {
-    const heroEl    = document.getElementById('download-count');
-    const sectionEl = document.getElementById('dl-section-downloads');
-    const prev = parseInt(heroEl.textContent.replace(/,/g, '')) || 0;
-    animateCount(heroEl,    prev, count);
-    animateCount(sectionEl, prev, count);
+    ['download-count', 'dl-section-downloads'].forEach(id => {
+      const el = document.getElementById(id);
+      if (!el) return;
+      const prev = parseInt(el.textContent.replace(/[^0-9]/g, '')) || 0;
+      animateCount(el, prev, count);
+    });
   }
 
-  // ── 1. INCREMENT VISIT COUNT on every page load ──
-  async function trackVisit() {
+  // Seed the display to 0 immediately (no "—" flash)
+  setVisitDisplay(0);
+  setDownloadDisplay(0);
+
+  // ── 1. INCREMENT visit on page load, display result ──
+  (async () => {
     try {
-      const res  = await fetch(`${API_BASE}/${NAMESPACE}/visits/up`);
+      const res = await fetch(`${API_BASE}/${NAMESPACE}/visits/up`);
+      if (!res.ok) throw new Error(`visits/up HTTP ${res.status}`);
       const data = await res.json();
-      setVisitDisplay(data.count);
+      setVisitDisplay(data.count ?? data.value ?? 0);
     } catch (e) {
-      // Silently fail — counters show "—" if API is unreachable
-      console.warn('Visit counter unavailable:', e);
+      console.warn('[ASCC] Visit counter:', e.message);
     }
-  }
+  })();
 
-  // ── 2. FETCH (read-only) the current download count on load ──
-  // v1 read endpoint is /:namespace/:name  (no "/get" suffix)
-  async function fetchDownloadCount() {
+  // ── 2. READ current download count on page load ──
+  // If counter doesn't exist yet, /up would create it — so we just
+  // try reading; if it 404s (never clicked yet) we leave it at 0.
+  (async () => {
     try {
-      const res  = await fetch(`${API_BASE}/${NAMESPACE}/downloads`);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const res = await fetch(`${API_BASE}/${NAMESPACE}/downloads`);
+      if (res.status === 404) return; // counter not created yet → stays 0
+      if (!res.ok) throw new Error(`downloads HTTP ${res.status}`);
       const data = await res.json();
-      setDownloadDisplay(data.count || 0);
+      setDownloadDisplay(data.count ?? data.value ?? 0);
     } catch (e) {
-      console.warn('Download counter fetch unavailable:', e);
+      console.warn('[ASCC] Download fetch:', e.message);
     }
-  }
+  })();
 
-  // ── 3. INCREMENT DOWNLOAD COUNT on any download click ──
-  async function trackDownload() {
-    try {
-      const res  = await fetch(`${API_BASE}/${NAMESPACE}/downloads/up`);
-      const data = await res.json();
-      setDownloadDisplay(data.count);
-    } catch (e) {
-      console.warn('Download counter increment unavailable:', e);
-    }
-  }
-
-  // Attach download tracking to all download buttons
+  // ── 3. INCREMENT download count on button click ──
+  let dlTracked = false; // prevent double-firing on same click
   document.querySelectorAll('.track-download').forEach(btn => {
-    btn.addEventListener('click', () => {
-      // Visual flash feedback
-      const orig = btn.style.background;
+    btn.addEventListener('click', async () => {
+      // Visual feedback
+      const origBg = btn.style.background;
       btn.style.background = 'linear-gradient(135deg, #22c55e, #16a34a)';
-      setTimeout(() => { btn.style.background = orig; }, 1800);
-      // Fire counter (non-blocking)
-      trackDownload();
+      setTimeout(() => { btn.style.background = origBg; }, 1800);
+
+      if (dlTracked) return; // already fired this session
+      dlTracked = true;
+
+      try {
+        const res = await fetch(`${API_BASE}/${NAMESPACE}/downloads/up`);
+        if (!res.ok) throw new Error(`downloads/up HTTP ${res.status}`);
+        const data = await res.json();
+        setDownloadDisplay(data.count ?? data.value ?? 0);
+      } catch (e) {
+        console.warn('[ASCC] Download increment:', e.message);
+        dlTracked = false; // allow retry if it failed
+      }
     });
   });
-
-  // ── INIT: run both on page load ──
-  trackVisit();
-  fetchDownloadCount();
 </script>
 </body>
 </html>
