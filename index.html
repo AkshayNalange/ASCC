@@ -1798,11 +1798,12 @@
   }
 
   // ── 2. FETCH (read-only) the current download count on load ──
+  // v1 read endpoint is /:namespace/:name  (no "/get" suffix)
   async function fetchDownloadCount() {
     try {
-      const res  = await fetch(`${API_BASE}/${NAMESPACE}/downloads/get`);
+      const res  = await fetch(`${API_BASE}/${NAMESPACE}/downloads`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
-      // counterapi returns count:0 for a brand-new key
       setDownloadDisplay(data.count || 0);
     } catch (e) {
       console.warn('Download counter fetch unavailable:', e);
